@@ -1,0 +1,9 @@
+public void myMethod(myClass data)
+{
+    Dictionary<string, string> myDict = new Dictionary<string, string>();
+    Type t = data.GetType();
+    foreach (PropertyInfo pi in t.GetProperties())
+    {
+        myDict[pi.Name] = pi.GetValue(data,null).ToString();
+    }
+}
