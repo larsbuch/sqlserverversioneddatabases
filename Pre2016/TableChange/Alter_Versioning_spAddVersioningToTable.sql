@@ -1,12 +1,19 @@
-CREATE SCHEMA [versioning]
+IF NOT EXISTS (
+SELECT  schema_name
+FROM    information_schema.schemata
+WHERE   schema_name = 'versioning' ) 
+
+BEGIN
+EXEC sp_executesql N'CREATE SCHEMA versioning'
+END
 GO
-CREATE PROCEDURE versioning.spAddVersioningToTable(
+ALTER PROCEDURE versioning.spAddVersioningToTable(
 	@SchemaName sysname
 	, @TableName sysname
 	, @RepopulateVersionConfig BIT = 1
 	, @RecreateTable BIT = 1
 	, @HashDataColumn sysname = 'VersioningDataHash'
-	, @VersioningTablePostScript NVARCHAR(10) = 'versioning'
+	, @VersioningTablePostScript sysname = @SchemaName
 	)
 AS
 	SET NOCOUNT ON

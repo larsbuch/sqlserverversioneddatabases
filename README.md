@@ -3,12 +3,13 @@
 ### Where and when to use it ###
 
 * **Client modifiable data:** If you have data that goes to the client/mobile systems where the client should be able to modify the data.
-* **Two-way data replication:** Replication of data between systems.
+* **Two-way data replication:** Replication of data between systems with one as master.
 * Source for simplified change tracking on databases before Sql Server 2016
 
 ### Where it is not useful
 
-* Where the performance impact of the INSTEAD OF triggers would make problems
+* Where the performance impact of the INSTEAD OF triggers would make problems. The impact of the triggers is an unmeasured.
+* Tables that use identity in primary key eg ```IDENTITY(1,1)``` in definition as it makes the instead of trigger more difficult to make.
 
 ### How does it work ###
 
@@ -35,6 +36,8 @@
 * Performance impact measuring. I know that the instead of triggers has an impact
 * Improving example code
 * Support for no master systems
+* Support for identity tables if possible.
+* Automatic cleanup in history table
 
 ### Who do I talk to? ###
 
