@@ -10,9 +10,8 @@ GO
 ALTER PROCEDURE versioning.spAddVersioningToTable(
 	@TableName SYSNAME
 	, @SchemaName SYSNAME = 'dbo'
-	, @RepopulateVersionConfig BIT = 1
 	, @HashDataColumnSuffix NVARCHAR(50) = '_DataHash'
-	, @HistoryTableShema SYSNAME = @SchemaName
+	, @HistoryTableSchema SYSNAME = 'NotSet'
 	, @HistoryTableSuffix SYSNAME = 'versioning'
 	)
 AS
@@ -20,6 +19,12 @@ AS
 
 	DECLARE @sql NVARCHAR(MAX)
 	DECLARE @sqlColumns NVARCHAR(MAX) = ''
+
+	-- Set @HistoryTableSchema when not set
+	IF @HistoryTableSchema = 'NotSet'
+	BEGIN
+		SET @HistoryTableSchema = @SchemaName
+	END
 
 	-- Fail if table has identity
 	IF (SELECT TOP 1 OBJECTPROPERTY(tables.object_id,'TableHasIdentity') AS TableHasIdentity
@@ -57,44 +62,23 @@ AS
 		ROLLBACK TRANSACTION
 	END
 
+	-- Get table information
+		DECLARE @VersionConfig TABLE(
+			[VersionConfigID] [INT] IDENTITY(1,1) NOT NULL,
+			[SchemaName] sysname NOT NULL,
+			[TableName] sysname NOT NULL,
+			[ColumnName] sysname NOT NULL,
+			[ColumnOrder] INT NOT NULL,
+			[CollationName] sysname NULL,
+			[IsNullable] BIT NOT NULL,
+			[TypeName] sysname NOT NULL,
+			[IsPrimaryKey] BIT NOT NULL,
+			[SequencePrimaryKey] [NVARCHAR](2000) NOT NULL
+		)
 
-	IF @RepopulateVersionConfig = 1
-	BEGIN
-		-- Create Version config if not existing
-		IF NOT EXISTS (SELECT 0 from sys.tables t join sys.schemas s on t.schema_id = s.schema_id where t.name = 'VersionConfig' and s.name = 'versioning')
-		BEGIN
-			CREATE TABLE [versioning].[VersionConfig](
-				[VersionConfigID] [INT] IDENTITY(1,1) NOT NULL,
-				[SchemaName] sysname NOT NULL,
-				[TableName] sysname NOT NULL,
-				[ColumnName] sysname NOT NULL,
-				[ColumnOrder] INT NOT NULL,
-				[CollationName] sysname NULL,
-				[IsNullable] BIT NOT NULL,
-				[TypeName] sysname NOT NULL,
-				[IsPrimaryKey] BIT NOT NULL,
-				[EnableVersioning] [TINYINT] NOT NULL CONSTRAINT [DF_VersionConfig_EnableVersioning]  DEFAULT ((1)),
-				[SequencePrimaryKey] [NVARCHAR](2000) NOT NULL
-			 CONSTRAINT [PK_AuditConfig] PRIMARY KEY CLUSTERED 
-			(
-				[VersionConfigID] ASC
-			)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY],
-			 CONSTRAINT [IX_AuditConfig_UniqueKey] UNIQUE NONCLUSTERED 
-			(
-				[SchemaName] ASC,
-				[TableName] ASC,
-				[ColumnName] ASC
-			)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]
-			) ON [PRIMARY]
-		END
-
-		-- Delete from VersionConfig
-		DELETE FROM versioning.VersionConfig
-		WHERE SchemaName = @SchemaName
-		AND TableName = @TableName
 
 		-- Populate VersionConfig
-		insert into [versioning].[VersionConfig] (SchemaName, TableName,ColumnName, ColumnOrder, IsNullable, CollationName, TypeName, IsPrimaryKey, EnableVersioning, SequencePrimaryKey)
+		insert into @VersionConfig (SchemaName, TableName,ColumnName, ColumnOrder, IsNullable, CollationName, TypeName, IsPrimaryKey, SequencePrimaryKey)
 		SELECT schemas.name AS schema_name
 			, tables.name AS table_name
 			, columns.name AS column_name
@@ -107,8 +91,7 @@ AS
 					ELSE types.name 
 				END AS type_name
 			, ISNULL(indexes.is_primary_key, 0) AS primary_key
-			, CAST(1 AS TINYINT) As EnableVersioning
-			, CASE WHEN OBJECT_DEFINITION(columns.default_object_id) LIKE '%NEXT VALUE%' AND ISNULL(indexes.is_primary_key, 0) = 1 THEN REPLACE(REPLACE(OBJECT_DEFINITION(293576084),'(',''),')','') + ' AS ' + columns.name ELSE columns.name END AS SequencePrimaryKey
+			, CASE WHEN OBJECT_DEFINITION(columns.default_object_id) LIKE '%NEXT VALUE%' AND ISNULL(indexes.is_primary_key, 0) = 1 THEN REPLACE(REPLACE(OBJECT_DEFINITION(columns.default_object_id),'(',''),')','') + ' AS ' + columns.name ELSE columns.name END AS SequencePrimaryKey
 		FROM sys.tables tables
 			INNER JOIN sys.columns AS columns 
 				ON tables.object_id = columns.object_id
@@ -124,26 +107,25 @@ AS
 			LEFT OUTER JOIN sys.indexes AS indexes 
 				ON index_columns.object_id = indexes.object_id 
 				AND index_columns.index_id = indexes.index_id
-	END -- @RepopulateVersionConfig = 1
 
 	-- Recreate History Table
 
 	-- Check existance of table
-	IF exists (SELECT 0 from sys.tables t join sys.schemas s on t.schema_id = s.schema_id where t.name = @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix and s.name = @HistoryTableSuffix)
+	IF exists (SELECT 0 from sys.tables t join sys.schemas s on t.schema_id = s.schema_id where t.name = @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix and s.name = @HistoryTableSchema)
 	BEGIN
-		SET @sql = 'DROP TABLE [' + @HistoryTableShema +'].' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix
+		SET @sql = 'DROP TABLE [' + @HistoryTableSchema +'].' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix
 		EXEC sp_executesql @sql
 	END
 
 	-- Check existance of sequence
-	IF exists (SELECT * from sys.objects o join sys.schemas s on o.schema_id = s.schema_id where o.type = 'SO' and o.name = @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + 'ID' and s.name = @HistoryTableSuffix)
+	IF exists (SELECT * from sys.objects o join sys.schemas s on o.schema_id = s.schema_id where o.type = 'SO' and o.name = @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + 'ID' and s.name = @HistoryTableSchema)
 	BEGIN
-		SET @sql = 'DROP SEQUENCE [' + @HistoryTableShema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + 'ID]' + CHAR(10)
+		SET @sql = 'DROP SEQUENCE [' + @HistoryTableSchema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + 'ID]' + CHAR(10)
 		EXEC sp_executesql @sql
 	END
 
 	-- Create sequence
-	SET @sql = 'CREATE SEQUENCE [' + @HistoryTableShema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + 'ID]' + CHAR(10)
+	SET @sql = 'CREATE SEQUENCE [' + @HistoryTableSchema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + 'ID]' + CHAR(10)
 	SET @sql = @sql + ' AS [bigint]' + CHAR(10)
 	SET @sql = @sql + ' START WITH 1' + CHAR(10)
 	SET @sql = @sql + ' INCREMENT BY 1' + CHAR(10)
@@ -151,9 +133,9 @@ AS
 	EXEC sp_executesql @sql
 
 	-- Create Audit table
-	SET @sql = 'CREATE TABLE [' + @HistoryTableShema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + '] ('  + CHAR(10)
-	+ @TableName + '_' + @HistoryTableSuffix + 'ID BIGINT NOT NULL CONSTRAINT [PK_' + @HistoryTableShema + '_' + @TableName + '_' + @HistoryTableSuffix + '] PRIMARY KEY CONSTRAINT [' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + 'ID_Constraint] DEFAULT (NEXT VALUE FOR [' + @HistoryTableSuffix +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + 'ID]), ' + CHAR(10)
-	+ @HistoryTableSuffix + '_Time DATETIME CONSTRAINT ' + @HistoryTableShema + '_' + @TableName + '_' + @HistoryTableSuffix + '_Time DEFAULT GETUTCDATE(), ' + CHAR(10)
+	SET @sql = 'CREATE TABLE [' + @HistoryTableSchema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + '] ('  + CHAR(10)
+	+ @TableName + '_' + @HistoryTableSuffix + 'ID BIGINT NOT NULL CONSTRAINT [PK_' + @HistoryTableSchema + '_' + @TableName + '_' + @HistoryTableSuffix + '] PRIMARY KEY CONSTRAINT [' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + 'ID_Constraint] DEFAULT (NEXT VALUE FOR [' + @HistoryTableSchema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + 'ID]), ' + CHAR(10)
+	+ @HistoryTableSuffix + '_Time DATETIME CONSTRAINT ' + @HistoryTableSchema + '_' + @TableName + '_' + @HistoryTableSuffix + '_Time DEFAULT GETUTCDATE(), ' + CHAR(10)
 	+ 'Operation CHAR(1) NOT NULL, ' + CHAR(10)
 	SET @sqlColumns = ''
 
@@ -162,10 +144,9 @@ AS
 				+ ColumnName + ' ' + TypeName 
 				+ CASE WHEN CollationName IS NOT NULL THEN ' COLLATE ' + CollationName + ' ' ELSE '' END
 				+ CASE WHEN IsNullable = 1 THEN ' NULL ' ELSE ' NOT NULL ' END + CHAR(10)
-	FROM [versioning].[VersionConfig]
+	FROM @VersionConfig
 	WHERE SchemaName = @SchemaName
 	AND TableName = @TableName
-	AND EnableVersioning = 1
 	ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns + ')' + CHAR(10)
@@ -201,7 +182,7 @@ AS
 			+ 'UPDATE(' + ColumnName + ')' + CHAR(10)
 		FROM (
 			SELECT ColumnName, ColumnOrder
-			FROM [versioning].[VersionConfig]
+			FROM @VersionConfig
 			WHERE SchemaName = @SchemaName
 			AND TableName = @TableName
 			AND IsPrimaryKey = 1
@@ -223,10 +204,9 @@ AS
 					+ CASE WHEN @sqlColumns = '' THEN '' ELSE ', ' END
 					+ ColumnName + ' ' + TypeName 
 					+ CASE WHEN CollationName IS NOT NULL THEN ' COLLATE ' + CollationName + ' ' ELSE '' END + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns
@@ -239,11 +219,10 @@ AS
 		SELECT @sqlColumns = @sqlColumns 
 					+ ', '
 					+ ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
 		AND ColumnName <> @HashDataColumn
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder ASC
 
 	SET @sql = @sql + @sqlColumns
@@ -254,12 +233,11 @@ AS
 		SELECT @sqlColumns = @sqlColumns 
 					+ CASE WHEN @sqlColumns = '' THEN ', ' ELSE ' + ' END
 					+ '''' + ColumnName + ''' + ISNULL(CAST(' + ColumnName + ' AS NVARCHAR(4000)), ''NULL'')' + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
 		AND ColumnName <> @HashDataColumn
 		AND IsPrimaryKey = 0
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns
@@ -269,11 +247,10 @@ AS
 		SELECT @sqlColumns = @sqlColumns 
 					+ ', '
 					+ ColumnName  + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
 		AND ColumnName <> @HashDataColumn
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns
@@ -285,11 +262,10 @@ AS
 
 		SELECT @sqlColumns = @sqlColumns 
 					+ ', ' + ColumnName + ' = inserted.' + ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
 		AND ColumnName <> @HashDataColumn
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns
@@ -300,7 +276,7 @@ AS
 		SELECT @sqlColumns = @sqlColumns
 			+ CASE WHEN @sqlColumns = '' THEN ' ON ' ELSE ' AND ' END
 			+ ' deleted.' + ColumnName + ' = inserted.' + ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
 		AND IsPrimaryKey = 1
@@ -313,7 +289,7 @@ AS
 		SELECT @sqlColumns = @sqlColumns
 			+ CASE WHEN @sqlColumns = '' THEN ' WHERE ' ELSE ' AND ' END
 			+ '['+ @SchemaName + '].[' + TableName + '].[' + ColumnName + '] = inserted.' + ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
 		AND IsPrimaryKey = 1
@@ -322,16 +298,15 @@ AS
 	SET @sql = @sql + @sqlColumns
 
 	-- Insert versioning
-	SET @sql = @sql + '	INSERT INTO [' + @HistoryTableShema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + ']' + '(' + CHAR(10)
+	SET @sql = @sql + '	INSERT INTO [' + @HistoryTableSchema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + ']' + '(' + CHAR(10)
 	SET @sql = @sql + '		 Operation' + CHAR(10)
 	SET @sqlColumns = ''
 
 		SELECT @sqlColumns = @sqlColumns
 			+ ', ' + ColumnName
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns
@@ -341,10 +316,9 @@ AS
 
 		SELECT @sqlColumns = @sqlColumns
 			+ ', deleted.' + ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns
@@ -355,7 +329,7 @@ AS
 		SELECT @sqlColumns = @sqlColumns
 			+ CASE WHEN @sqlColumns = '' THEN ' ON ' ELSE ' AND ' END
 			+ ' deleted.' + ColumnName + ' = inserted.' + ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
 		AND IsPrimaryKey = 1
@@ -378,10 +352,9 @@ AS
 					+ CASE WHEN @sqlColumns = '' THEN '' ELSE ', ' END
 					+ ColumnName + ' ' + TypeName 
 					+ CASE WHEN CollationName IS NOT NULL THEN ' COLLATE ' + CollationName + ' ' ELSE '' END + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns
@@ -394,11 +367,10 @@ AS
 		SELECT @sqlColumns = @sqlColumns 
 					+ ', '
 					+ ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
 		AND ColumnName <> @HashDataColumn
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder ASC
 
 	SET @sql = @sql + @sqlColumns
@@ -409,12 +381,11 @@ AS
 		SELECT @sqlColumns = @sqlColumns 
 					+ CASE WHEN @sqlColumns = '' THEN ', ' ELSE ' + ' END
 					+ '''' + ColumnName + ''' + ISNULL(CAST(' + ColumnName + ' AS NVARCHAR(4000)), ''NULL'')' + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
 		AND ColumnName <> @HashDataColumn
 		AND IsPrimaryKey = 0
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns
@@ -424,11 +395,10 @@ AS
 		SELECT @sqlColumns = @sqlColumns 
 					+ ', '
 					+ SequencePrimaryKey + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
 		AND ColumnName <> @HashDataColumn
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder ASC
 
 	SET @sql = @sql + @sqlColumns
@@ -440,10 +410,9 @@ AS
 		SELECT @sqlColumns = @sqlColumns 
 					+ CASE WHEN @sqlColumns = '' THEN '' ELSE ', ' END
 					+ ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder ASC
 
 	SET @sql = @sql + @sqlColumns
@@ -453,26 +422,24 @@ AS
 		SELECT @sqlColumns = @sqlColumns 
 					+ CASE WHEN @sqlColumns = '' THEN 'SELECT ' ELSE ', ' END
 					+ ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder ASC
 
 	SET @sql = @sql + @sqlColumns
 	SET @sql = @sql + 'FROM @InsertedWithDataHash ' + CHAR(10) + CHAR(10)
 
 	-- Insert versioning
-	SET @sql = @sql + '	INSERT INTO [' + @HistoryTableShema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + ']' + '(' + CHAR(10)
+	SET @sql = @sql + '	INSERT INTO [' + @HistoryTableSchema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + ']' + '(' + CHAR(10)
 	SET @sql = @sql + '		 Operation' + CHAR(10)
 	SET @sqlColumns = ''
 
 		SELECT @sqlColumns = @sqlColumns
 			+ ', ' + ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns
@@ -482,10 +449,9 @@ AS
 
 		SELECT @sqlColumns = @sqlColumns
 			+ ', inserted.' + ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns
@@ -499,16 +465,15 @@ AS
 	SET @sql = @sql + 'AS ' + CHAR(10)
 
 	-- Insert versioning
-	SET @sql = @sql + '	INSERT INTO [' + @HistoryTableShema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + ']' + '(' + CHAR(10)
+	SET @sql = @sql + '	INSERT INTO [' + @HistoryTableSchema +'].[' + @SchemaName + '_' + @TableName + '_' + @HistoryTableSuffix + ']' + '(' + CHAR(10)
 	SET @sql = @sql + '		 Operation' + CHAR(10)
 	SET @sqlColumns = ''
 
 		SELECT @sqlColumns = @sqlColumns
 			+ ', ' + ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns
@@ -518,10 +483,9 @@ AS
 
 		SELECT @sqlColumns = @sqlColumns
 			+ ', deleted.' + ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
-		AND EnableVersioning = 1
 		ORDER BY ColumnOrder
 
 	SET @sql = @sql + @sqlColumns
@@ -532,7 +496,7 @@ AS
 		SELECT @sqlColumns = @sqlColumns
 			+ CASE WHEN @sqlColumns = '' THEN ' ON ' ELSE ' AND ' END
 			+ ' deleted.' + ColumnName + ' = [' + @SchemaName +'].[' + @TableName + '].' + ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
 		AND IsPrimaryKey = 1
@@ -548,7 +512,7 @@ AS
 		SELECT @sqlColumns = @sqlColumns
 			+ CASE WHEN @sqlColumns = '' THEN ' ON ' ELSE ' AND ' END
 			+ ' deleted.' + ColumnName + ' = [' + @SchemaName +'].[' + @TableName + '].' + ColumnName + CHAR(10)
-		FROM [versioning].[VersionConfig]
+		FROM @VersionConfig
 		WHERE SchemaName = @SchemaName
 		AND TableName = @TableName
 		AND IsPrimaryKey = 1
