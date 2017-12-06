@@ -4,7 +4,7 @@
 
 * **Client modifiable data:** If you have data that goes to the client/mobile systems where the client should be able to modify the data.
 * **Two-way data replication:** Replication of data between systems with one as master.
-* Source for simplified change tracking on databases before Sql Server 2016
+* Source for simplified change tracking/audit on databases in Sql Server 2012
 
 ### Where it is not useful
 
@@ -13,7 +13,7 @@
 
 ### How does it work ###
 
-* **Versioning:** Technically this should have been named **Versioned Tables** as it is consisting of versioning triggers that can be put on a table to track changes and save when there are conflicts between the incoming data and the last updated.
+* **Versioning:** Technically it works by adding one or two shadow tables and adding versioning triggers that track changes on the table in a shadow table for history and possibly save when there are conflicts between the incoming data and the last updated.
 
 * **Structure:**
 
@@ -23,7 +23,7 @@
 
   * Each table needs to have a column for tracking the data changes version. It is a SHA256 hash (``` BINARY(32)```) over the non-key column-names and column data here called a datahash.
 
-    Datahash column is named &lt;tablename&gt;DataHash fx ```tbl_CustomerDataHash``` 
+    Datahash column is named &lt;tablename&gt;_DataHash fx ```tbl_Customer_DataHash``` 
 
   * To each table an INSTEAD OF trigger is added for each insert, update and delete
 
