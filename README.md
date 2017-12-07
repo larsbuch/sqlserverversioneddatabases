@@ -31,6 +31,8 @@
 
 ### Revision
 
+0.3.0 Added filtering for non-versioned data
+
 0.2.0 Support for table contents
 
 0.1.0 Initial Commit
