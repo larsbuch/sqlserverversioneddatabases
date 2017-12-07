@@ -29,6 +29,12 @@
 
 * **Example Structure:** The example tables consist of **tbl_CustomerType**, **tbl_Customer**, **tbl_CustomerOrder** and **tbl_CustomerOrderLine**.
 
+### Revision
+
+0.2.0 Support for table contents
+
+0.1.0 Initial Commit
+
 ### Future changes
 
 * Updating to [Sql Server 2016 System-Versioned Temporal Table](https://docs.microsoft.com/en-us/sql/relational-databases/tables/temporal-tables)
@@ -38,6 +44,7 @@
 * Support for no master systems
 * Support for identity tables if possible.
 * Automatic cleanup in history table
+* Remove script for versioning tables and triggers
 
 ### Who do I talk to? ###
 
